@@ -99,7 +99,7 @@
     <label>Modèle
       <select id="model">
         <option value="onnx-community/Qwen2.5-0.5B-Instruct">Léger (~400 Mo)</option>
-        <option value="onnx-community/Qwen2.5-1.5B-Instruct">Puissant (~1 Go)</option>
+        <option value="onnx-community/Qwen3-1.7B-ONNX">Puissant, Qwen3 (~1,3 Go)</option>
       </select>
     </label>
     <label><input type="checkbox" id="tts"> Lire à voix haute</label>
@@ -140,7 +140,7 @@
     ecriture: "Tu es Plixel AI, un assistant d’écriture. Aide à rédiger, reformuler et corriger des textes.",
     trad: "Tu es Plixel AI, un traducteur. Traduis le message de l’utilisateur du français vers l’anglais, ou de l’anglais vers le français, sans commentaire."
   };
-  const sys = () => PERSONAS[$("persona").value] + " Tu fonctionnes directement dans le navigateur de l’utilisateur, grâce au modèle libre Qwen2.5 (Alibaba Cloud). Si on te demande qui tu es ou qui t’a créé, réponds que tu t’appelles Plixel AI et que tu es basé sur ce modèle libre. Ne dis jamais que tu as été créé par Google, OpenAI ou une autre entreprise. Réponds dans la langue de l’utilisateur, de façon courte et simple.";
+  const sys = () => PERSONAS[$("persona").value] + " Tu fonctionnes directement dans le navigateur de l’utilisateur, grâce à un modèle libre de la famille Qwen (Alibaba Cloud). Si on te demande qui tu es ou qui t’a créé, réponds que tu t’appelles Plixel AI et que tu es basé sur ce modèle libre. Ne dis jamais que tu as été créé par Google, OpenAI ou une autre entreprise. Réponds dans la langue de l’utilisateur, de façon courte et simple.";
 
   // ---------- Stockage local (historique) ----------
   const KEY = "plixel-conversations";
@@ -163,6 +163,7 @@
     "Propose-moi 3 idées d’activités pour ce week-end"
   ];
   const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const clean = (t) => t.replace(/<think>[\s\S]*?(?:<\/think>\s*|$)/g, "");
   const md = (t) => esc(t)
     .replace(/```(?:\w+)?\n?([\s\S]*?)```/g, "<pre><code>$1</code></pre>")
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
@@ -246,6 +247,13 @@
   };
 
   // ---------- Chargement du modèle ----------
+  async function pickDevice() {
+    try {
+      const a = navigator.gpu && await navigator.gpu.requestAdapter();
+      if (a) return { device: "webgpu", f16: a.features.has("shader-f16") };
+    } catch {}
+    return { device: "wasm", f16: false };
+  }
   $("model").onchange = () => {
     if (busy) return;
     generator = null; input.disabled = send.disabled = $("mic").disabled = true;
@@ -253,18 +261,20 @@
     status.textContent = "Nouveau modèle : clique sur Démarrer."; render();
   };
   $("load").onclick = async () => {
-    const big = $("model").value.includes("1.5B");
+    const big = $("model").value.includes("1.7B");
     const weak = (navigator.deviceMemory && navigator.deviceMemory < 4) || /Android|iPhone|iPad/i.test(navigator.userAgent);
     if (big && weak && !confirm("Le modèle puissant est lourd : il peut être lent ou planter sur cet appareil. Continuer ?")) return;
     $("load").disabled = true; $("progress").style.display = "block";
     status.textContent = "Téléchargement du modèle…";
     try {
+      const { device, f16 } = await pickDevice();
+      const dtype = ($("model").value.includes("Qwen3") && f16) ? "q4f16" : "q4";
       generator = await pipeline("text-generation", $("model").value, {
-        dtype: "q4", device: navigator.gpu ? "webgpu" : "wasm",
+        dtype, device,
         progress_callback: (p) => { if (p.status === "progress") $("pbar").style.width = p.progress.toFixed(0) + "%"; },
       });
       $("load").style.display = "none"; $("progress").style.display = "none";
-      status.textContent = "Plixel AI est prête, sur ton appareil." + (navigator.gpu ? " Accélération graphique active." : " Mode standard, plus lent.");
+      status.textContent = "Plixel AI est prête, sur ton appareil." + (device === "webgpu" ? " Accélération graphique active." : " Mode standard, plus lent.");
       input.disabled = send.disabled = false; $("mic").disabled = !SR;
       document.querySelectorAll(".chip").forEach((c) => c.disabled = false);
       input.focus();
@@ -294,7 +304,7 @@
     a.download = "conversation-plixel.txt"; a.click(); URL.revokeObjectURL(a.href);
   };
   const LEGAL = {
-    mentions: "<h2>Mentions légales</h2><p><strong>Éditeur et directeur de la publication :</strong> Plixel.</p><p><strong>Contact :</strong> non spécifié.</p><p><strong>Hébergeur :</strong> GitHub, Inc. (GitHub Pages), 88 Colin P. Kelly Jr. Street, San Francisco, CA 94107, États-Unis. Site : github.com.</p><p><strong>Technologies utilisées :</strong> bibliothèque Transformers.js (Hugging Face) et modèle de langage Qwen2.5 (Alibaba Cloud), distribués sous licence libre Apache 2.0.</p><p>Plixel AI est une intelligence artificielle. Droit applicable : droit français.</p>",
+    mentions: "<h2>Mentions légales</h2><p><strong>Éditeur et directeur de la publication :</strong> Plixel.</p><p><strong>Contact :</strong> non spécifié.</p><p><strong>Hébergeur :</strong> GitHub, Inc. (GitHub Pages), 88 Colin P. Kelly Jr. Street, San Francisco, CA 94107, États-Unis. Site : github.com.</p><p><strong>Technologies utilisées :</strong> bibliothèque Transformers.js (Hugging Face) et modèles de langage Qwen (Alibaba Cloud), distribués sous licence libre Apache 2.0.</p><p>Plixel AI est une intelligence artificielle. Droit applicable : droit français.</p>",
     privacy: "<h2>Confidentialité</h2><p><strong>Tes conversations restent sur ton appareil.</strong> L’intelligence artificielle fonctionne dans ton navigateur : tes messages ne sont envoyés à aucun serveur de Plixel.</p><p><strong>Historique :</strong> il est enregistré uniquement dans le stockage local de ton navigateur, pour te permettre de retrouver tes discussions. Tu peux le supprimer à tout moment avec « Tout effacer ».</p><p><strong>Services tiers :</strong> au démarrage, le script et le modèle sont téléchargés depuis jsDelivr et Hugging Face. Ces services peuvent voir ton adresse IP et des informations techniques de connexion.</p><p><strong>Dictée vocale :</strong> si tu utilises le micro, le navigateur peut envoyer l’audio à son propre service de reconnaissance vocale (par exemple Google pour Chrome).</p><p><strong>Hébergement :</strong> le site est hébergé par GitHub Pages, qui peut enregistrer des données techniques de connexion (comme l’adresse IP) selon sa propre politique de confidentialité.</p><p><strong>Cookies et suivi :</strong> Plixel n’utilise ni cookie de suivi, ni publicité, ni statistiques.</p><p><strong>Tes droits :</strong> Plixel ne collecte aucune donnée personnelle te concernant : tu gardes la maîtrise de tes données depuis ton navigateur (bouton « Tout effacer »). Aucun contact n’est spécifié pour le moment. Tu peux saisir la CNIL (cnil.fr) en cas de difficulté.</p>",
     cgu: "<h2>Conditions générales d’utilisation</h2><p><strong>Service gratuit, fourni tel quel.</strong> Plixel AI est une intelligence artificielle : ses réponses peuvent être inexactes, incomplètes ou inappropriées. Vérifie les informations importantes.</p><p><strong>Pas de conseil professionnel.</strong> Les réponses ne remplacent ni un médecin, ni un avocat, ni un conseiller financier. En cas d’urgence, contacte les services d’urgence.</p><p><strong>Utilisation.</strong> Tu t’engages à ne pas utiliser le service à des fins illégales ou pour nuire à autrui, et à ne pas saisir d’informations sensibles sur des tiers.</p><p><strong>Responsabilité.</strong> L’éditeur ne garantit pas la disponibilité du service et ne peut être tenu responsable des décisions prises à partir des réponses générées.</p><p><strong>Évolution.</strong> Ces conditions peuvent être modifiées ; la date de mise à jour figure en bas de page.</p>"
   };
@@ -331,14 +341,15 @@
     cur.messages.push({ role: "user", content: text });
     render();
     const bubble = addMsg("…", "ai");
-    let answer = "";
+    let answer = "", raw = "";
     try {
       const streamer = new TextStreamer(generator.tokenizer, {
         skip_prompt: true, skip_special_tokens: true,
-        callback_function: (t) => { answer += t; bubble.innerHTML = md(answer); chat.scrollTop = chat.scrollHeight; },
+        callback_function: (t) => { raw += t; answer = clean(raw); bubble.innerHTML = md(answer); chat.scrollTop = chat.scrollHeight; },
       });
       const msgs = [{ role: "system", content: sys() }, ...cur.messages.slice(-10)];
-      await generator(msgs, { max_new_tokens: 300, streamer, stopping_criteria: stopper, ...(regen ? { do_sample: true, temperature: 0.8 } : { do_sample: false }) });
+      const prompt = generator.tokenizer.apply_chat_template(msgs, { tokenize: false, add_generation_prompt: true, enable_thinking: false });
+      await generator(prompt, { max_new_tokens: 400, streamer, stopping_criteria: stopper, ...(regen ? { do_sample: true, temperature: 0.8 } : { do_sample: false }) });
     } catch (e) { answer = answer || "Une erreur est survenue : " + e.message; bubble.textContent = answer; }
     cur.messages.push({ role: "assistant", content: answer || "(réponse interrompue)" });
     save(); speak(answer); addTools(bubble, answer, true);
