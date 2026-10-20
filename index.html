@@ -99,7 +99,8 @@
     <label>Modèle
       <select id="model">
         <option value="onnx-community/Qwen2.5-0.5B-Instruct">Léger (~400 Mo)</option>
-        <option value="onnx-community/Qwen3-1.7B-ONNX">Puissant, Qwen3 (~1,3 Go)</option>
+        <option value="onnx-community/Qwen3-0.6B-ONNX">Équilibré, Qwen3 (~500 Mo)</option>
+        <option value="onnx-community/Qwen3-1.7B-ONNX">Puissant, expérimental (~1,3 Go)</option>
       </select>
     </label>
     <label><input type="checkbox" id="tts"> Lire à voix haute</label>
@@ -107,6 +108,7 @@
 
   <button id="load" type="button">Démarrer Plixel AI</button>
   <div id="progress"><div id="pbar"></div></div>
+  <button id="cancel" type="button" style="display:none;margin:10px 16px 0">Annuler le chargement</button>
 
   <main id="chat" role="log" aria-live="polite"></main>
   <div class="notice">Plixel AI est une intelligence artificielle : ses réponses peuvent contenir des erreurs. Vérifie les informations importantes.</div>
@@ -260,26 +262,56 @@
     $("load").style.display = ""; $("load").disabled = false;
     status.textContent = "Nouveau modèle : clique sur Démarrer."; render();
   };
+  $("cancel").onclick = () => location.reload();
+  window.addEventListener("unhandledrejection", (e) => {
+    if (!generator) status.textContent = "Erreur : " + ((e.reason && e.reason.message) || e.reason);
+  });
   $("load").onclick = async () => {
-    const big = $("model").value.includes("1.7B");
+    const id = $("model").value;
+    const big = id.includes("1.7B");
     const weak = (navigator.deviceMemory && navigator.deviceMemory < 4) || /Android|iPhone|iPad/i.test(navigator.userAgent);
-    if (big && weak && !confirm("Le modèle puissant est lourd : il peut être lent ou planter sur cet appareil. Continuer ?")) return;
-    $("load").disabled = true; $("progress").style.display = "block";
-    status.textContent = "Téléchargement du modèle…";
+    if (big && !confirm("Ce modèle est lourd et expérimental : il demande un ordinateur récent avec une bonne carte graphique et peut prendre plusieurs minutes à s’initialiser. Si rien ne se passe après 5 minutes, clique sur « Annuler le chargement ». Continuer ?")) return;
+    if (big && weak && !confirm("Cet appareil semble limité : le modèle puissant risque d’être très lent ou de planter. Continuer quand même ?")) return;
+    $("load").disabled = true; $("progress").style.display = "block"; $("cancel").style.display = "block";
+    $("pbar").style.width = "0%"; status.textContent = "Préparation…";
+    const files = {}; const t0 = Date.now(); let doneAt = 0, timer = null;
+    const tick = () => {
+      let l = 0, t = 0, all = true;
+      for (const f of Object.values(files)) { l += f.loaded; t += f.total; if (!f.done) all = false; }
+      if (t) $("pbar").style.width = Math.min(100, l / t * 100).toFixed(0) + "%";
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (t > 50 * 1048576 && all && Object.keys(files).length) {
+        if (!doneAt) doneAt = Date.now();
+        const s2 = Math.round((Date.now() - doneAt) / 1000);
+        status.textContent = "Initialisation du modèle dans la mémoire… " + s2 + " s. Cela peut prendre quelques minutes.";
+        if (s2 > 300) status.textContent += " Si rien ne change, ton appareil est sans doute trop juste : clique sur « Annuler le chargement » et choisis un modèle plus léger.";
+      } else if (t > 0) {
+        doneAt = 0;
+        status.textContent = "Téléchargement : " + (l / 1048576).toFixed(0) + " / " + (t / 1048576).toFixed(0) + " Mo";
+      } else status.textContent = "Préparation… " + sec + " s";
+    };
     try {
       const { device, f16 } = await pickDevice();
-      const dtype = ($("model").value.includes("Qwen3") && f16) ? "q4f16" : "q4";
-      generator = await pipeline("text-generation", $("model").value, {
+      const dtype = (id.includes("Qwen3") && f16) ? "q4f16" : "q4";
+      timer = setInterval(tick, 1000);
+      generator = await pipeline("text-generation", id, {
         dtype, device,
-        progress_callback: (p) => { if (p.status === "progress") $("pbar").style.width = p.progress.toFixed(0) + "%"; },
+        progress_callback: (p) => {
+          if (!p.file) return;
+          const f = files[p.file] || (files[p.file] = { loaded: 0, total: 0, done: false });
+          if (p.status === "progress") { f.loaded = p.loaded; f.total = p.total; }
+          if (p.status === "done") { f.done = true; f.total = f.total || f.loaded; f.loaded = f.total; }
+        },
       });
-      $("load").style.display = "none"; $("progress").style.display = "none";
+      clearInterval(timer);
+      $("load").style.display = "none"; $("progress").style.display = "none"; $("cancel").style.display = "none";
       status.textContent = "Plixel AI est prête, sur ton appareil." + (device === "webgpu" ? " Accélération graphique active." : " Mode standard, plus lent.");
       input.disabled = send.disabled = false; $("mic").disabled = !SR;
       document.querySelectorAll(".chip").forEach((c) => c.disabled = false);
       input.focus();
     } catch (e) {
-      status.textContent = "Erreur de chargement : " + e.message + ". Vérifie ta connexion internet puis réessaie (navigateur récent conseillé : Chrome ou Edge).";
+      clearInterval(timer); $("cancel").style.display = "none";
+      status.textContent = "Erreur de chargement : " + e.message + ". Essaie le modèle Léger ou Équilibré, vérifie ta connexion internet (navigateur récent conseillé : Chrome ou Edge).";
       $("load").disabled = false;
     }
   };
